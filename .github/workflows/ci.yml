@@ -8,7 +8,7 @@ env:
 
 jobs:
   prebuild-windows:
-    runs-on: windows-2019
+    runs-on: windows-latest
     steps:
     - uses: actions/checkout@v3
       with:
@@ -39,7 +39,7 @@ jobs:
         retention-days: 7
 
   prebuild-linux:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
       with:
@@ -74,7 +74,7 @@ jobs:
         retention-days: 7
 
   prebuild-darwin:
-    runs-on: macos-12
+    runs-on: macos-latest
     steps:
     - uses: actions/checkout@v3
       with:
