@@ -148,5 +148,5 @@ jobs:
     - uses: actions/upload-artifact@v4
       with:
         name: package
-        path: uiohook-napi-*.tgz
+        path: osabc-uiohook-napi-*.tgz
         retention-days: 7
