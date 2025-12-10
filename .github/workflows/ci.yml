@@ -2,88 +2,156 @@ name: Prebuild
 
 on: push
 
+env:
+  NODE_VERSION: '18'
+  YARN_CACHE_FOLDER: ${{ github.workspace }}/.yarn-cache
+
 jobs:
   prebuild-windows:
     runs-on: windows-2019
+    strategy:
+      matrix:
+        arch: [x64, arm64]
     steps:
     - uses: actions/checkout@v3
       with:
         submodules: true
     - uses: actions/setup-node@v3
-    - run: npm install --global node-gyp
-    - run: yarn apply-libuiohook-patch
-    - run: yarn --frozen-lockfile
-    - run: yarn prebuild --arch x64
-    # - run: yarn prebuild --arch arm64
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'yarn'
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          node_modules
+          ${{ env.YARN_CACHE_FOLDER }}
+        key: ${{ runner.os }}-node-${{ hashFiles('**/yarn.lock') }}
+    - name: Install global dependencies
+      run: npm install --global node-gyp
+    - name: Install dependencies
+      run: yarn --frozen-lockfile --prefer-offline
+    - name: Apply patch
+      run: yarn apply-libuiohook-patch
+    - name: Prebuild
+      run: yarn prebuild --arch ${{ matrix.arch }}
     - uses: actions/upload-artifact@v4
       with:
-        name: windows
+        name: windows-prebuild-${{ matrix.arch }}
         path: prebuilds
+        retention-days: 7
 
   prebuild-linux:
     runs-on: ubuntu-20.04
+    strategy:
+      matrix:
+        arch: [x64, arm64]
     steps:
     - uses: actions/checkout@v3
       with:
         submodules: true
     - uses: actions/setup-node@v3
-    - run: |
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'yarn'
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          node_modules
+          ${{ env.YARN_CACHE_FOLDER }}
+        key: ${{ runner.os }}-node-${{ hashFiles('**/yarn.lock') }}
+    - name: Install system dependencies
+      run: |
         sudo apt-get update
         sudo apt-get install -y libxrandr-dev libxtst-dev
-    - run: yarn apply-libuiohook-patch
-    - run: yarn --frozen-lockfile
-    - run: yarn prebuild --arch x64
-    - run: yarn prebuild --arch arm64
+    - name: Install dependencies
+      run: yarn --frozen-lockfile --prefer-offline
+    - name: Apply patch
+      run: yarn apply-libuiohook-patch
+    - name: Prebuild
+      run: yarn prebuild --arch ${{ matrix.arch }}
     - uses: actions/upload-artifact@v4
       with:
-        name: linux
+        name: linux-prebuild-${{ matrix.arch }}
         path: prebuilds
+        retention-days: 7
 
   prebuild-darwin:
     runs-on: macos-12
+    strategy:
+      matrix:
+        arch: [x64, arm64]
     steps:
     - uses: actions/checkout@v3
       with:
         submodules: true
     - uses: actions/setup-node@v3
-    - run: yarn apply-libuiohook-patch
-    - run: yarn --frozen-lockfile
-    - run: yarn prebuild --arch x64
-    - run: yarn prebuild --arch arm64
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'yarn'
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          node_modules
+          ${{ env.YARN_CACHE_FOLDER }}
+        key: ${{ runner.os }}-node-${{ hashFiles('**/yarn.lock') }}
+    - name: Install dependencies
+      run: yarn --frozen-lockfile --prefer-offline
+    - name: Apply patch
+      run: yarn apply-libuiohook-patch
+    - name: Prebuild
+      run: yarn prebuild --arch ${{ matrix.arch }}
     - uses: actions/upload-artifact@v4
       with:
-        name: darwin
+        name: darwin-prebuild-${{ matrix.arch }}
         path: prebuilds
+        retention-days: 7
 
   build-package:
-    needs:
-    - prebuild-windows
-    - prebuild-linux
-    - prebuild-darwin
+    needs: [prebuild-windows, prebuild-linux, prebuild-darwin]
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
       with:
         submodules: true
-    - uses: actions/download-artifact@v4
-      with:
-        name: windows
-        path: prebuilds
-    - uses: actions/download-artifact@v4
-      with:
-        name: linux
-        path: prebuilds
-    - uses: actions/download-artifact@v4
-      with:
-        name: darwin
-        path: prebuilds
+    - name: Download all artifacts
+      run: |
+        mkdir -p all-prebuilds
+        for artifact_name in windows-prebuild-x64 windows-prebuild-arm64 linux-prebuild-x64 linux-prebuild-arm64 darwin-prebuild-x64 darwin-prebuild-arm64; do
+          echo "Downloading $artifact_name..."
+          gh run download $(gh run list --workflow=prebuild.yml --branch ${GITHUB_REF#refs/heads/} --json databaseId --jq '.[0].databaseId') \
+            --name "$artifact_name" \
+            --dir all-prebuilds/$artifact_name 2>/dev/null || true
+        done
+    - name: Merge prebuilds
+      run: |
+        mkdir -p prebuilds
+        find all-prebuilds -name "*.node" -o -name "*.tar.gz" | xargs -I {} cp {} prebuilds/ || true
+        echo "Merged prebuild files:"
+        ls -la prebuilds/
     - uses: actions/setup-node@v3
-    - run: yarn apply-libuiohook-patch
-    - run: yarn --frozen-lockfile --ignore-scripts
-    - run: yarn tsc
-    - run: npm pack
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'yarn'
+    - name: Cache dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          node_modules
+          ${{ env.YARN_CACHE_FOLDER }}
+        key: ${{ runner.os }}-node-${{ hashFiles('**/yarn.lock') }}
+    - name: Install dependencies
+      run: yarn --frozen-lockfile --ignore-scripts
+    - name: Apply patch
+      run: yarn apply-libuiohook-patch
+    - name: TypeScript compilation
+      run: yarn tsc
+    - name: Pack package
+      run: npm pack
     - uses: actions/upload-artifact@v4
       with:
         name: package
         path: uiohook-napi-*.tgz
-        retention-days: 3
+        retention-days: 7
