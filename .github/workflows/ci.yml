@@ -1,6 +1,11 @@
-name: Prebuild
+name: CI and Release
 
-on: push
+on:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main, master ]
 
 env:
   NODE_VERSION: '18'
@@ -104,32 +109,25 @@ jobs:
         path: prebuilds
         retention-days: 7
 
-  build-package:
+  build-and-release:
     needs: [prebuild-windows, prebuild-linux, prebuild-darwin]
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: read
+      packages: write
     steps:
     - uses: actions/checkout@v3
       with:
         submodules: true
-    - name: Download Windows artifact
-      uses: actions/download-artifact@v4
-      with:
-        name: windows-prebuild
-        path: prebuilds
-    - name: Download Linux artifact
-      uses: actions/download-artifact@v4
-      with:
-        name: linux-prebuild
-        path: prebuilds
-    - name: Download macOS artifact
-      uses: actions/download-artifact@v4
-      with:
-        name: darwin-prebuild
-        path: prebuilds
+        fetch-depth: 0
+
     - uses: actions/setup-node@v3
       with:
         node-version: ${{ env.NODE_VERSION }}
         cache: 'yarn'
+        registry-url: 'https://npm.pkg.github.com'
+        
     - name: Cache dependencies
       uses: actions/cache@v3
       with:
@@ -137,16 +135,49 @@ jobs:
           node_modules
           ${{ env.YARN_CACHE_FOLDER }}
         key: ${{ runner.os }}-node-${{ hashFiles('**/yarn.lock') }}
+
+    - name: Download all prebuild artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+        pattern: "*-prebuild"
+        merge-multiple: true
+
+    - name: Copy prebuilds
+      run: |
+        mkdir -p prebuilds
+        cp -r artifacts/* prebuilds/ || true
+        ls -la prebuilds/
+
     - name: Install dependencies
       run: yarn --frozen-lockfile --ignore-scripts
+
     - name: Apply patch
       run: yarn apply-libuiohook-patch
+
     - name: TypeScript compilation
       run: yarn tsc
-    - name: Pack package
-      run: npm pack
-    - uses: actions/upload-artifact@v4
-      with:
-        name: package
-        path: osabc-uiohook-napi-*.tgz
-        retention-days: 7
+
+    - name: Publish to GitHub Packages
+      run: npm publish --registry=https://npm.pkg.github.com
+      env:
+        NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Get package info
+      id: package
+      run: |
+        echo "name=$(node -p "require('./package.json').name")" >> $GITHUB_OUTPUT
+        echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+
+    - name: Create summary
+      run: |
+        echo "## 📦 Package Published Successfully!" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Package:** ${{ steps.package.outputs.name }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Version:** ${{ steps.package.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+        echo "**Registry:** GitHub Packages" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Installation" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+        echo "npm install ${{ steps.package.outputs.name }} --registry=https://npm.pkg.github.com" >> $GITHUB_STEP_SUMMARY
+        echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
